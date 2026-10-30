@@ -29,3 +29,6 @@ Thumbs.db
 *.log
 LOCAL-NOTES.md
 .env
+
+# npm pack output
+*.tgz

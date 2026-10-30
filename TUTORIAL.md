@@ -57,7 +57,7 @@ Now the four checks:
 |---|---|---|
 | `adb shell dumpsys battery \| Select-String temperature` | `temperature: 300` … `360` (that is 30.0–36.0 °C, idle) | `temperature: 600`+ while the phone feels cool to the touch |
 | `adb shell dumpsys thermalservice \| Select-String "BAT\|SKIN\|AP"` | all sensors within a few degrees of each other | one sensor far above the others, or `0.0` |
-| `adb shell getprop ro.boot.bootreason` | `reboot,shell` / `reboot,factory` / `cordocharge,3` | `reboot,thermal` or `reboot,tc956x` — a real thermal trip |
+| `adb shell getprop ro.boot.bootreason` | anything that is not a temperature reason (the investigated device read `reboot,diwarme_maintenancemode` — a deliberate maintenance reboot) | `reboot,thermal`, or any value naming a temperature or charger trip |
 | `adb shell dumpsys battery \| Select-String "voltage\|level"` | 3700–4400 mV at sane percentages | a voltage that collapses when the screen lights up |
 
 How to read them:
