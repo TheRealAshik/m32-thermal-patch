@@ -9,6 +9,13 @@ itself off" problem, but the DTB walk is generic, so it works against any Samsun
 **No dependencies.** Node 18+ only. No Python, no `dtc`, no `lz4` binary, no
 AOSP toolchain.
 
+**You do not have to build anything.**
+[Releases](https://github.com/TheRealAshik/m32-thermal-patch/releases) carries a
+self-contained binary for Windows, macOS (arm64 + Intel) and Linux, built by CI on
+every tag. Start at **[TUTORIAL.md](TUTORIAL.md)** — it is the step-by-step path,
+including the five-minute diagnosis that tells you whether flashing this is even
+your problem.
+
 ---
 
 ## Read this before you flash anything
@@ -99,6 +106,25 @@ Pass `--threshold 2000 --recovery 1980` for the shutdown only, or read
 You supply your **own** firmware. This repo ships no Samsung binaries — see
 [Why no firmware files](#why-no-firmware-files).
 
+### No install: the release binary
+
+Download `patch-dtbo-windows-x64.exe` (or the macOS/Linux equivalent) from
+[Releases](https://github.com/TheRealAshik/m32-thermal-patch/releases), check it against
+`SHA256SUMS.txt`, and use it exactly like the `node` command below:
+
+```powershell
+.\patch-dtbo-windows-x64.exe --input .\AP_M325FXXSDDYE3.tar.md5 --list
+.\patch-dtbo-windows-x64.exe --input .\AP_M325FXXSDDYE3.tar.md5 --apply
+```
+
+It is this same script injected into an unmodified Node runtime, so behaviour and output
+bytes are identical - CI compares them. It is not code-signed, which is why Windows
+SmartScreen and macOS Gatekeeper complain on first run.
+
+If you have Node 18+ already: `npm install -g m32-thermal-patch`, then `patch-dtbo`.
+
+### From source
+
 ```bash
 # 1. Inspect. Read-only, writes nothing:
 node src/patch-dtbo.mjs --input AP_M325FXXSDDYE3_..._tar.md5 --list
@@ -159,6 +185,8 @@ To go back to a stock threshold explicitly: `--threshold 700 --recovery 680`.
 ## Flashing
 
 Only if you have done the diagnosis above and accept the Knox consequence.
+Step-by-step, including driver and failure troubleshooting, is
+[TUTORIAL.md section 6](TUTORIAL.md#6-flash-it). Summary:
 
 1. **Charge the phone above 50 %.** A flash that dies halfway is how a recoverable
    mod becomes a dead board. This is not a suggestion.
@@ -181,11 +209,24 @@ tar instead — the tool already reads and reuses the stock member header.
 The overlay DTB is applied into the running device tree at boot, so:
 
 ```bash
-adb shell 'find /proc/device-tree /firmware/devicetree/base -name "*overheatlimit*"'
-adb shell 'od -An -tu4 $(find /proc/device-tree -name "*overheatlimit_threshold*" | head -1)'
+adb shell 'su -c "find /proc/device-tree -name \"*overheatlimit*\""'
+adb shell 'su -c "od -An -tu4 \$(find /proc/device-tree -name \"*overheatlimit_threshold*\" | head -1)"'
 ```
 
 It should print `2000`. Reading `PASS!` in Odin is not confirmation; this is.
+
+**These paths need root.** On this firmware `/sys/class/thermal/thermal_zone*/temp` returns
+`Permission denied` for the `shell` user (verified on SM-M325F, Android 13, no Magisk
+installed), and `/proc/device-tree` is restricted the same way. Without root you can confirm
+the phone still boots on the same build and that thermal reporting still works:
+
+```bash
+adb shell getprop ro.build.version.incremental
+adb shell dumpsys thermalservice
+```
+
+but the value you flashed is only readable from a rooted device. Without root the test is
+behavioural: does the false power-off still happen.
 
 ### Rollback
 
@@ -253,6 +294,48 @@ tool can target those properties with a small edit to the `TARGETS` list.
 
 ---
 
+## Builds and CI
+
+| Workflow | Trigger | What it does |
+|---|---|---|
+| [`ci.yml`](.github/workflows/ci.yml) | every push and PR | runs the self-tests on Node 18/20/22/24, refuses any tracked firmware file, bundles the single-file build and proves it emits the same bytes as `src/` |
+| [`release.yml`](.github/workflows/release.yml) | a `v*` tag | tests, then builds `patch-dtbo-windows-x64.exe`, `patch-dtbo-macos-arm64`, `patch-dtbo-macos-x64`, `patch-dtbo-linux-x64` and `patch-dtbo.mjs`, checks each binary against the fixture, and publishes them with `SHA256SUMS.txt` |
+| [`publish-to-npm.yml`](.github/workflows/publish-to-npm.yml) | a published release | `npm publish --provenance` via OIDC (no stored token). Needs one-time npm Trusted Publisher setup; see the header of that file |
+
+**CI never sees Samsung firmware.** That is deliberate and it is why the tests run on a
+synthetic `dtbo` fixture (`test/build-fixture.mjs`) instead: a 5 GB proprietary archive cannot
+be committed, and a patched binary built from someone's build is a hazard to everyone else.
+The tests do cover the alignment trap that matters - the fixture's second DTB is placed at an
+offset congruent to 2 mod 4, exactly like the real M32 image at `87342`.
+
+Release it yourself with:
+
+```bash
+npm test                      # must be green
+npm run build                 # dist/patch-dtbo.mjs + .cjs
+node tools/build-sea.mjs      # a local binary for your own OS
+git tag v0.2.0 && git push origin v0.2.0     # CI does the rest
+```
+
+## Reports of this problem elsewhere
+
+Links supplied while investigating the M32 case, with what could actually be verified from
+them on 2026-10-30:
+
+- [iFixit - "Android fake overheating warning"](https://www.ifixit.com/Answers/View/906524/Android+fake+overheating+warning) -
+  readable. A Galaxy M32 false-overheat report whose accepted answer was **battery
+  replacement** (~£26). That is evidence for the voltage-sag theory, not for this patch.
+- [r/phonerepair thread](https://www.reddit.com/r/phonerepair/comments/18yhgzf/) - not
+  readable from here (Reddit serves a login/JS shell to a plain fetch). Treat as unverified.
+- [Samsung Members r2 - "Problem after recent updates in Galaxy M32 4G"](https://r2.community.samsung.com/t5/Galaxy-M/Problem-after-recent-updates-in-Galaxy-M32-4G/m-p/14491886/highlight/true) -
+  returned **403 Forbidden** to this tool. Listed because it is a thread the case reporter
+  pointed at, not because its contents were read.
+- [Samsung Members r2 - "Device heating and charging problem"](https://r2.community.samsung.com/t5/Galaxy-M/Device-heating-and-charging-problem/td-p/15742258) -
+  same: **403 Forbidden**, contents unread.
+
+If you can read the two r2 threads, say in an issue what they conclude - they may already
+contain the confirmation this patch is missing.
+
 ## Why no firmware files
 
 This repo contains no `.img`, `.lz4`, `.tar` or `.tar.md5` — `.gitignore` enforces
@@ -280,6 +363,12 @@ it. Two reasons:
 - ustar only. Not tested against tar formats using pax headers or GNU long names.
 - The LZ4 encoder is correct but naive; output is about 13 % larger than Samsung's
   (68,354 vs 60,204 bytes). Irrelevant for dtbo, which has ample partition space.
+- The release binaries are unmodified Node runtimes with this script injected and **no code
+  signature**, so they are ~90 MB each and SmartScreen/Gatekeeper complain on first run. If
+  you would rather not run an unsigned binary, use `patch-dtbo.mjs` with your own Node, or
+  build the binary yourself with `npm run build:exe`.
+- `build-sea.mjs` reads the `NODE_SEA_FUSE` sentinel out of whatever `node` binary it is
+  given; a Node build without SEA support simply errors instead of producing a broken file.
 
 ## License
 

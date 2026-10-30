@@ -6,11 +6,20 @@
   "bin": { "patch-dtbo": "src/patch-dtbo.mjs" },
   "scripts": {
     "list": "node src/patch-dtbo.mjs --list",
-    "dry": "node src/patch-dtbo.mjs"
+    "dry": "node src/patch-dtbo.mjs",
+    "build": "node tools/bundle.mjs",
+    "build:exe": "node tools/build-sea.mjs",
+    "test": "node test/build-fixture.mjs && node test/selftest.mjs && node test/cli-refusals.mjs",
+    "prepack": "npm run build"
   },
   "engines": { "node": ">=18" },
-  "files": ["src/", "README.md", "LICENSE"],
+  "files": ["src/", "dist/", "README.md", "TUTORIAL.md", "LICENSE"],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TheRealAshik/m32-thermal-patch.git"
+  },
+  "homepage": "https://github.com/TheRealAshik/m32-thermal-patch#readme",
   "keywords": [
     "samsung",
     "sm-m325f",

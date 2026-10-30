@@ -1,0 +1,5 @@
+{
+  "main": "dist/patch-dtbo.cjs",
+  "output": "dist/patch-dtbo.blob",
+  "disableExperimentalSEAWarning": true
+}

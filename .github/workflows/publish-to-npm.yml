@@ -1,0 +1,96 @@
+name: publish-to-npm
+
+# Optional distribution channel: `npx m32-thermal-patch --input ...` for anyone who already
+# has Node and no antivirus complaints about an unsigned 90 MiB binary.
+#
+# One-time setup, otherwise this workflow fails with an explanatory message:
+#   1. npm login (or create the package once) - the name must belong to you.
+#   2. On the npm package page: Settings -> Trusted Publishers -> Add publisher,
+#      repository = TheRealAshik/m32-thermal-patch, workflow = publish-to-npm.yml.
+#   No NPM_TOKEN is stored in GitHub; publishing uses OIDC, so no long-lived secret exists.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Tests
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: npm publish (provenance)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Refuse to overwrite a published version
+        id: state
+        run: |
+          set -e
+          VERSION=$(node -p "require('./package.json').version")
+          TAG=$(node -p "require('./package.json').name")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "package=$TAG" >> "$GITHUB_OUTPUT"
+          if npm view "$TAG@$VERSION" version >/dev/null 2>&1; then
+            echo "$TAG@$VERSION is already on the registry - bump package.json before publishing." >> "$GITHUB_STEP_SUMMARY"
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "$TAG@$VERSION is not published yet." >> "$GITHUB_STEP_SUMMARY"
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and test the tarball contents
+        run: |
+          set -e
+          node tools/bundle.mjs
+          node test/build-fixture.mjs
+          node test/selftest.mjs
+          node test/cli-refusals.mjs
+          npm pack --dry-run
+
+      - name: Publish
+        id: publish
+        if: steps.state.outputs.published != 'true'
+        continue-on-error: true
+        run: npm publish --access public --provenance
+
+      - name: Explain a failure instead of leaving a red cross
+        if: steps.publish.outcome == 'failure'
+        run: |
+          {
+            echo "## npm publish failed"
+            echo
+            echo "This workflow uses npm **OIDC trusted publishing**, so no token is stored in"
+            echo "GitHub. It only works once the package exists and trusts this repo:"
+            echo
+            echo "1. One manual publish from a logged-in npm account, or create the package on npmjs.com."
+            echo "2. On the package page: **Settings -> Trusted Publisher -> Add**,"
+            echo "   repository \`TheRealAshik/m32-thermal-patch\`, workflow \`publish-to-npm.yml\`."
+            echo "3. Re-run this workflow."
+            echo
+            echo "The GitHub Release and its binaries are unaffected by this step - npm is an"
+            echo "optional extra channel for people who already have Node installed."
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+      - name: Already published
+        if: steps.state.outputs.published == 'true'
+        run: echo "Skipped - this version is on the registry already. See the job summary."

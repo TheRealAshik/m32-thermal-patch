@@ -1,0 +1,169 @@
+name: release
+
+# Push a tag like v0.2.0 and this runs the tests, bundles the tool, builds a no-install
+# binary for Windows/macOS/Linux, and publishes them as a GitHub Release. Users download
+# one file and run it - no Node, no npm, no build step on their machine.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to release (must already exist, e.g. v0.2.0)
+        required: true
+        type: string
+      dry_run:
+        description: Build and test everything, but do not publish a Release
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Tests
+    uses: ./.github/workflows/ci.yml
+
+  binaries:
+    name: ${{ matrix.label }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows x64
+            os: windows-latest
+            target: win32
+            out: patch-dtbo-windows-x64.exe
+          - label: macOS Apple Silicon
+            os: macos-14
+            target: darwin
+            out: patch-dtbo-macos-arm64
+          - label: macOS Intel
+            os: macos-13
+            target: darwin
+            out: patch-dtbo-macos-x64
+          - label: Linux x64
+            os: ubuntu-latest
+            target: linux
+            out: patch-dtbo-linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Bundle and build the self-contained binary
+        run: node tools/build-sea.mjs --target ${{ matrix.target }} --out ${{ matrix.out }}
+
+      - name: Prove the shipped binary works on a synthetic fixture
+        shell: bash
+        run: |
+          set -e
+          node test/build-fixture.mjs
+          BIN=dist/${{ matrix.out }}
+          [ -f "$BIN" ] || { echo "expected $BIN to exist"; exit 1; }
+          "$BIN" --input tmp/fixture_AP.tar.md5 --apply --outdir tmp/from-binary
+          node src/patch-dtbo.mjs --input tmp/fixture_AP.tar.md5 --apply --outdir tmp/from-source > /dev/null
+          # The binary users download must produce the same bytes the tested source produces.
+          cmp tmp/from-source/AP_dtbo_patched.tar.md5 tmp/from-binary/AP_dtbo_patched.tar.md5
+          echo "$BIN is byte-identical to the source build"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.out }}
+          path: dist/${{ matrix.out }}
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    needs: [test, binaries]
+    if: github.event_name == 'push' || github.event.inputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: patch-dtbo-*
+          path: staged
+          merge-multiple: true
+
+      - name: Stage files and checksums
+        run: |
+          set -e
+          node tools/bundle.mjs           # also ship the plain .mjs for people who have Node
+          cp dist/patch-dtbo.mjs staged/patch-dtbo.mjs
+          mkdir -p publish && mv staged/* publish/
+          cd publish
+          sha256sum * | tee SHA256SUMS.txt
+          echo
+          echo "Release contents:"
+          ls -la
+
+      - name: Release notes
+        run: |
+          cat > notes.md <<'EOF'
+          ## Read this first
+
+          **This patch has not been confirmed to fix false overheating on any device.** It
+          changes one number in the device tree: the temperature at which the battery driver
+          force-powers-off the phone. Nobody who has built this has flashed it either.
+
+          Before downloading, understand the costs:
+          - Flashing a modified partition trips the **Knox e-fuse** (0x1). Physical and
+            irreversible: Samsung Pay, Secure Folder and parts of the warranty are gone for good.
+          - Raising the shutdown threshold removes a safety cut-out on a 5,000 mAh cell.
+          - If the phone shuts down because of an aged battery rather than a misreading sensor,
+            this changes nothing. Charge above 50% and check voltage behaviour first.
+
+          ## Which file do I want?
+
+          | File | For |
+          |------|-----|
+          | `patch-dtbo-windows-x64.exe` | Windows, nothing to install |
+          | `patch-dtbo-macos-arm64` | Apple Silicon Mac (`chmod +x`, then right-click Open once) |
+          | `patch-dtbo-macos-x64` | Intel Mac |
+          | `patch-dtbo-linux-x64` | Linux, `chmod +x` |
+          | `patch-dtbo.mjs` | any machine with Node 18+; run `node patch-dtbo.mjs` |
+          | `SHA256SUMS.txt` | verify your download: `sha256sum -c SHA256SUMS.txt` |
+
+          Each binary is an unmodified Node runtime with this script injected and **no code
+          signature**, so SmartScreen/Gatekeeper will warn on first run. That is expected, not
+          a sign of tampering - but verify the checksum anyway.
+
+          ## Use
+
+              patch-dtbo-windows-x64.exe --input AP_M325FXXSDDYE3.tar.md5 --list
+              patch-dtbo-windows-x64.exe --input AP_M325FXXSDDYE3.tar.md5 --apply
+
+          `--list` only reads. `--apply` writes `out/AP_dtbo_patched.tar.md5`, then re-reads its
+          own output and refuses to finish unless every other property in the device tree is
+          byte-identical to your input. Full walkthrough: TUTORIAL.md.
+          EOF
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -e
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" publish/* --clobber
+          else
+            gh release create "$TAG" publish/* --title "$TAG" --notes-file notes.md
+          fi
+          gh release view "$TAG" --json tagName,url,assets --jq '{tag:.tagName,url:.url,files:[.assets[].name]}'

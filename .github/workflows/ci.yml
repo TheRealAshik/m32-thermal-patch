@@ -1,0 +1,107 @@
+name: ci
+
+# Runnable on its own (push, pull_request, manual) and reusable from release.yml, so a
+# release can never publish a tree that does not pass these tests.
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  selftest:
+    name: Self-tests (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 18 is the documented floor for the shipped tool; the build script itself is only
+        # exercised on 22+ because it uses import.meta.dirname.
+        node: ['18', '20', '22', '24']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Verify no firmware was ever committed
+        # The repo must stay source-only: a patched binary from one firmware build corrupts
+        # another, and redistributing Samsung firmware gets repos taken down.
+        run: |
+          set -e
+          if git ls-files | grep -iE '\.(img|lz4|lz40|tar|tar\.md5|md5|zip|pac)$'; then
+            echo "::error::firmware-sized file is tracked in git"
+            exit 1
+          fi
+          echo "clean: no firmware tracked"
+
+      - name: Syntax check every module
+        run: |
+          set -e
+          for f in src/*.mjs test/*.mjs tools/*.mjs; do node --check "$f"; done
+          echo "all modules parse"
+
+      - name: Build synthetic fixture and run unit self-tests
+        run: |
+          set -e
+          node test/build-fixture.mjs
+          node test/selftest.mjs
+
+      - name: Run the CLI end-to-end and confirm it refuses bad input
+        run: |
+          set -e
+          node test/cli-refusals.mjs
+
+      - name: Bundle and prove the single-file build is identical
+        # dist/ is what gets published. It must produce byte-for-byte the same archive as
+        # running from src/, or the release ships a different program than was tested.
+        if: matrix.node != '18'
+        run: |
+          set -e
+          node tools/bundle.mjs
+          for f in dist/patch-dtbo.mjs dist/patch-dtbo.cjs; do node --check "$f"; done
+          node src/patch-dtbo.mjs --input tmp/fixture_AP.tar.md5 --apply --outdir tmp/equiv-src > /dev/null
+          node dist/patch-dtbo.mjs --input tmp/fixture_AP.tar.md5 --apply --outdir tmp/equiv-esm > /dev/null
+          node dist/patch-dtbo.cjs --input tmp/fixture_AP.tar.md5 --apply --outdir tmp/equiv-cjs > /dev/null
+          cmp tmp/equiv-src/AP_dtbo_patched.tar.md5 tmp/equiv-esm/AP_dtbo_patched.tar.md5
+          cmp tmp/equiv-src/AP_dtbo_patched.tar.md5 tmp/equiv-cjs/AP_dtbo_patched.tar.md5
+          echo "bundle output is byte-identical to the source output"
+
+  lint:
+    name: Docs and metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: package.json is valid JSON with a bin entry
+        run: node -e "const p=require('./package.json'); if(!p.bin||!p.bin['patch-dtbo']) throw new Error('missing bin entry')"
+
+      - name: Required docs exist and keep their warnings
+        run: |
+          set -e
+          for f in README.md TUTORIAL.md LICENSE; do
+            [ -s "$f" ] || { echo "missing $f"; exit 1; }
+          done
+          grep -qi "not been confirmed to fix" README.md || { echo "README lost its unverified warning"; exit 1; }
+          grep -qi "Knox" README.md || { echo "README lost its Knox warning"; exit 1; }
+          grep -qi "not been confirmed to fix" TUTORIAL.md || { echo "TUTORIAL lost its unverified warning"; exit 1; }
+          echo "required warnings still present"
+
+      - name: No secrets or absolute local paths in the source
+        run: |
+          set -e
+          if grep -rniE "C:\\\\M32-stock|/c/M32-stock|Users.iamas" src/ test/ tools/ README.md TUTORIAL.md; then
+            echo "::error::source references this author's local paths"
+            exit 1
+          fi
+          echo "clean"
