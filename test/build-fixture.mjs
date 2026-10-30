@@ -5,7 +5,9 @@
 // 87342, 87342 % 4 == 2): any code that pads on absolute file offsets reads wrong
 // values out of the second tree without ever erroring.
 
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { lz4Frame } from '../src/lz4.mjs';
+import { buildTar, withMd5Trailer } from '../src/tar.mjs';
 
 const TAG = { BEGIN: 1, END_NODE: 2, PROP: 3, END: 9 };
 const RSVMAP = 40;
@@ -113,8 +115,16 @@ export function fixtureImage() { return image; }
 export function expectedRoots() {
   return [96, 96 + dtb1.length + pad + 2];
 }
+// The container the CLI is tested against: the same bytes Samsung ships, with our
+// synthetic image inside.
+export function fixtureTar() {
+  return withMd5Trailer(buildTar({ name: 'dtbo.img.lz4', payload: lz4Frame(image) }), 'fixture_AP.tar');
+}
 
 if (process.argv[1] && process.argv[1].endsWith('build-fixture.mjs')) {
   writeFileSync('fixture_dtbo.img', image);
+  mkdirSync('tmp', { recursive: true });
+  writeFileSync('tmp/fixture_AP.tar.md5', fixtureTar());
   console.log(`wrote fixture_dtbo.img ${image.length} bytes; DTB roots at ${expectedRoots().join(', ')} (second root % 4 = ${expectedRoots()[1] % 4})`);
+  console.log('wrote tmp/fixture_AP.tar.md5 (the container the CLI tests run against)');
 }

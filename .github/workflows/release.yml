@@ -42,18 +42,25 @@ jobs:
             os: windows-latest
             target: win32
             out: patch-dtbo-windows-x64.exe
+            optional: false
           - label: macOS Apple Silicon
             os: macos-14
             target: darwin
             out: patch-dtbo-macos-arm64
+            optional: false
           - label: macOS Intel
             os: macos-13
             target: darwin
             out: patch-dtbo-macos-x64
+            # Intel macOS runners are the ones being retired; losing this build must not
+            # hold up the release everyone else uses.
+            optional: true
           - label: Linux x64
             os: ubuntu-latest
             target: linux
             out: patch-dtbo-linux-x64
+            optional: false
+    continue-on-error: ${{ matrix.optional }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -69,6 +76,7 @@ jobs:
         shell: bash
         run: |
           set -e
+          # build-fixture writes both the raw image and the tar.md5 container the CLI reads.
           node test/build-fixture.mjs
           BIN=dist/${{ matrix.out }}
           [ -f "$BIN" ] || { echo "expected $BIN to exist"; exit 1; }

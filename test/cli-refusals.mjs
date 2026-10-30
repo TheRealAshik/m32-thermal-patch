@@ -2,11 +2,11 @@
 // (extract -> decode -> locate -> patch -> re-encode -> repack -> re-verify) works,
 // and that the refusal guards actually stop a run.
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { lz4Frame, unlz4Frame } from '../src/lz4.mjs';
-import { buildTar, withMd5Trailer, findMember, readRange, walkTar } from '../src/tar.mjs';
+import { buildTar, withMd5Trailer, findMember, readRange } from '../src/tar.mjs';
 import { findDtbRoots, parseDtb, readU32 } from '../src/dtb.mjs';
-import { fixtureImage, expectedRoots } from './build-fixture.mjs';
+import { fixtureImage, fixtureTar, expectedRoots } from './build-fixture.mjs';
 
 let pass = 0, fail = 0;
 const t = (name, fn) => {
@@ -15,12 +15,9 @@ const t = (name, fn) => {
 };
 
 if (!existsSync('fixture_dtbo.img')) writeFileSync('fixture_dtbo.img', fixtureImage());
-const image = readFileSync('fixture_dtbo.img');
-const payload = lz4Frame(image);
-const tar = buildTar({ name: 'dtbo.img.lz4', payload });
 mkdirSync('tmp', { recursive: true });
 const INPUT = 'tmp/fixture_AP.tar.md5';
-writeFileSync(INPUT, withMd5Trailer(tar, 'fixture_AP.tar'));
+if (!existsSync(INPUT)) writeFileSync(INPUT, fixtureTar());
 
 const run = (args) => spawnSync(process.execPath, ['src/patch-dtbo.mjs', ...args], { encoding: 'utf8', timeout: 120000 });
 const out = (r) => (r.stdout || '') + (r.stderr || '');
@@ -98,8 +95,9 @@ t('rejects an image with no matching property', () => {
 });
 
 t('rejects a container without a dtbo member', () => {
-  const t2 = buildTar({ name: 'preloader.img.lz4', payload });
-  writeFileSync('tmp/nodtbo.tar.md5', withMd5Trailer(t2, 'nodtbo.tar'));
+  // Same bytes as the working fixture, only filed under a name the tool must not accept.
+  writeFileSync('tmp/nodtbo.tar.md5',
+    withMd5Trailer(buildTar({ name: 'preloader.img.lz4', payload: lz4Frame(fixtureImage()) }), 'nodtbo.tar'));
   const r = run(['--input', 'tmp/nodtbo.tar.md5']);
   if (r.status === 0) throw new Error('accepted an archive with no dtbo');
   if (!out(r).includes('no "dtbo.img*" member found')) throw new Error(`wrong message: ${out(r).slice(-200)}`);
