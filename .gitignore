@@ -1,0 +1,31 @@
+# Never commit Samsung firmware - proprietary, and region/CSC variants differ per user
+*.img
+*.img.lz4
+*.lz4
+*.lz40
+*.tar
+*.tar.md5
+*.md5
+*.zip
+*.pac
+
+# Build output
+out/
+dist/
+tmp/
+work/
+
+# Node
+node_modules/
+package-lock.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Logs & local notes
+*.log
+LOCAL-NOTES.md
+.env

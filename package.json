@@ -1,0 +1,24 @@
+{
+  "name": "m32-thermal-patch",
+  "version": "0.1.0",
+  "description": "Locate and raise the Samsung sec_battery emergency overheat shutdown threshold inside dtbo.img, with byte-level verification. No dependencies.",
+  "type": "module",
+  "bin": { "patch-dtbo": "src/patch-dtbo.mjs" },
+  "scripts": {
+    "list": "node src/patch-dtbo.mjs --list",
+    "dry": "node src/patch-dtbo.mjs"
+  },
+  "engines": { "node": ">=18" },
+  "files": ["src/", "README.md", "LICENSE"],
+  "license": "MIT",
+  "keywords": [
+    "samsung",
+    "sm-m325f",
+    "galaxy-m32",
+    "dtbo",
+    "device-tree",
+    "thermal",
+    "overheat",
+    "odin"
+  ]
+}
